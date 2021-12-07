@@ -125,9 +125,18 @@ defmodule Phoenix.Tracker do
   """
   @spec track(atom, pid, topic, term, map) :: {:ok, ref :: binary} | {:error, reason :: term}
   def track(tracker_name, pid, topic, key, meta) when is_pid(pid) and is_map(meta) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> GenServer.call({:track, pid, topic, key, meta})
+    :telemetry.span(
+      [:phoenix_pubsub, :track],
+      %{},
+      fn ->
+        res =
+          tracker_name
+          |> Shard.name_for_topic(topic, pool_size(tracker_name))
+          |> GenServer.call({:track, pid, topic, key, meta})
+
+        {res, %{}}
+      end
+    )
   end
 
   @doc """
@@ -150,13 +159,29 @@ defmodule Phoenix.Tracker do
   """
   @spec untrack(atom, pid, topic, term) :: :ok
   def untrack(tracker_name, pid, topic, key) when is_pid(pid) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> GenServer.call({:untrack, pid, topic, key})
+    :telemetry.span(
+      [:phoenix_pubsub, :untrack_one],
+      %{},
+      fn ->
+        res =
+          tracker_name
+          |> Shard.name_for_topic(topic, pool_size(tracker_name))
+          |> GenServer.call({:untrack, pid, topic, key})
+
+        {res, %{}}
+      end
+    )
   end
+
   def untrack(tracker_name, pid) when is_pid(pid) do
-    shard_multicall(tracker_name, {:untrack, pid})
-    :ok
+    :telemetry.span(
+      [:phoenix_pubsub, :untrack_all],
+      %{},
+      fn ->
+        shard_multicall(tracker_name, {:untrack, pid})
+        {:ok, %{}}
+      end
+    )
   end
 
   @doc """
@@ -178,11 +203,22 @@ defmodule Phoenix.Tracker do
       iex> Phoenix.Tracker.update(MyTracker, self(), "lobby", u.id, fn meta -> Map.put(meta, :away, true) end)
       {:ok, "1WpAofWYIAA="}
   """
-  @spec update(atom, pid, topic, term, map | (map -> map)) :: {:ok, ref :: binary} | {:error, reason :: term}
-  def update(tracker_name, pid, topic, key, meta) when is_pid(pid) and (is_map(meta) or is_function(meta)) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> GenServer.call({:update, pid, topic, key, meta})
+  @spec update(atom, pid, topic, term, map | (map -> map)) ::
+          {:ok, ref :: binary} | {:error, reason :: term}
+  def update(tracker_name, pid, topic, key, meta)
+      when is_pid(pid) and (is_map(meta) or is_function(meta)) do
+    :telemetry.span(
+      [:phoenix_pubsub, :update],
+      %{},
+      fn ->
+        res =
+          tracker_name
+          |> Shard.name_for_topic(topic, pool_size(tracker_name))
+          |> GenServer.call({:update, pid, topic, key, meta})
+
+        {res, %{}}
+      end
+    )
   end
 
   @doc """
@@ -200,9 +236,18 @@ defmodule Phoenix.Tracker do
   """
   @spec list(atom, topic) :: [presence]
   def list(tracker_name, topic) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> Phoenix.Tracker.Shard.list(topic)
+    :telemetry.span(
+      [:phoenix_pubsub, :list],
+      %{},
+      fn ->
+        res =
+          tracker_name
+          |> Shard.name_for_topic(topic, pool_size(tracker_name))
+          |> Phoenix.Tracker.Shard.list(topic)
+
+        {res, %{}}
+      end
+    )
   end
 
   @doc """
@@ -221,9 +266,18 @@ defmodule Phoenix.Tracker do
   """
   @spec get_by_key(atom, topic, term) :: [presence]
   def get_by_key(tracker_name, topic, key) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> Phoenix.Tracker.Shard.get_by_key(topic, key)
+    :telemetry.span(
+      [:phoenix_pubsub, :get_by_key],
+      %{},
+      fn ->
+        res =
+          tracker_name
+          |> Shard.name_for_topic(topic, pool_size(tracker_name))
+          |> Phoenix.Tracker.Shard.get_by_key(topic, key)
+
+        {res, %{}}
+      end
+    )
   end
 
   @doc """
