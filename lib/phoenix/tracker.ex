@@ -71,11 +71,12 @@ defmodule Phoenix.Tracker do
   require Logger
   alias Phoenix.Tracker.Shard
 
-  @type presence :: {key :: String.t, meta :: map}
-  @type topic :: String.t
+  @type presence :: {key :: String.t(), meta :: map}
+  @type topic :: String.t()
 
-  @callback init(Keyword.t) :: {:ok, state :: term} | {:error, reason :: term}
-  @callback handle_diff(%{topic => {joins :: [presence], leaves :: [presence]}}, state :: term) :: {:ok, state :: term}
+  @callback init(Keyword.t()) :: {:ok, state :: term} | {:error, reason :: term}
+  @callback handle_diff(%{topic => {joins :: [presence], leaves :: [presence]}}, state :: term) ::
+              {:ok, state :: term}
 
   defmacro __using__(_opts) do
     quote location: :keep do

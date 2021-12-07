@@ -34,7 +34,7 @@ defmodule Phoenix.PubSub do
       It supports a `:pool_size` option to be given alongside
       the name, defaults to `1`. Note the `:pool_size` must
       be the same throughout the cluster, therefore don't
-      configure the pool size based on `System.schedulers_online/1`, 
+      configure the pool size based on `System.schedulers_online/1`,
       especially if you are using machines with different specs.
 
     * `Phoenix.PubSub.Redis` - uses Redis to exchange data between
@@ -118,10 +118,17 @@ defmodule Phoenix.PubSub do
   @spec subscribe(t, topic, keyword) :: :ok | {:error, term}
   def subscribe(pubsub, topic, opts \\ [])
       when is_atom(pubsub) and is_binary(topic) and is_list(opts) do
-    case Registry.register(pubsub, topic, opts[:metadata]) do
-      {:ok, _} -> :ok
-      {:error, _} = error -> error
-    end
+    :telemetry.span(
+      [:phoenix_pubsub, :subscribe],
+      %{},
+      fn ->
+        Registry.register(pubsub, topic, opts[:metadata])
+        |> case do
+          {:ok, _} -> {:ok, %{}}
+          {:error, _} = error -> {error, %{}}
+        end
+      end
+    )
   end
 
   @doc """
@@ -129,7 +136,13 @@ defmodule Phoenix.PubSub do
   """
   @spec unsubscribe(t, topic) :: :ok
   def unsubscribe(pubsub, topic) when is_atom(pubsub) and is_binary(topic) do
-    Registry.unregister(pubsub, topic)
+    :telemetry.span(
+      [:phoenix_pubsub, :unsubscribe],
+      %{},
+      fn ->
+        {Registry.unregister(pubsub, topic), %{}}
+      end
+    )
   end
 
   @doc """
@@ -145,11 +158,20 @@ defmodule Phoenix.PubSub do
   @spec broadcast(t, topic, message, dispatcher) :: :ok | {:error, term}
   def broadcast(pubsub, topic, message, dispatcher \\ __MODULE__)
       when is_atom(pubsub) and is_binary(topic) and is_atom(dispatcher) do
-    {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+    meta = %{type: :broadcast, dispatcher: dispatcher}
 
-    with :ok <- adapter.broadcast(name, topic, message, dispatcher) do
-      dispatch(pubsub, :none, topic, message, dispatcher)
-    end
+    :telemetry.span(
+      [:phoenix_pubsub, :broadcast],
+      meta,
+      fn ->
+        {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+
+        with :ok <- adapter.broadcast(name, topic, message, dispatcher) do
+          res = dispatch(pubsub, :none, topic, message, dispatcher)
+          {res, meta}
+        end
+      end
+    )
   end
 
   @doc """
@@ -166,11 +188,20 @@ defmodule Phoenix.PubSub do
   @spec broadcast_from(t, pid, topic, message, dispatcher) :: :ok | {:error, term}
   def broadcast_from(pubsub, from, topic, message, dispatcher \\ __MODULE__)
       when is_atom(pubsub) and is_pid(from) and is_binary(topic) and is_atom(dispatcher) do
-    {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+    meta = %{type: :broadcast_from, dispatcher: dispatcher}
 
-    with :ok <- adapter.broadcast(name, topic, message, dispatcher) do
-      dispatch(pubsub, from, topic, message, dispatcher)
-    end
+    :telemetry.span(
+      [:phoenix_pubsub, :broadcast],
+      meta,
+      fn ->
+        {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+
+        with :ok <- adapter.broadcast(name, topic, message, dispatcher) do
+          res = dispatch(pubsub, from, topic, message, dispatcher)
+          {res, meta}
+        end
+      end
+    )
   end
 
   @doc """
@@ -186,7 +217,16 @@ defmodule Phoenix.PubSub do
   @spec local_broadcast(t, topic, message, dispatcher) :: :ok
   def local_broadcast(pubsub, topic, message, dispatcher \\ __MODULE__)
       when is_atom(pubsub) and is_binary(topic) and is_atom(dispatcher) do
-    dispatch(pubsub, :none, topic, message, dispatcher)
+    meta = %{type: :local_broadcast, dispatcher: dispatcher}
+
+    :telemetry.span(
+      [:phoenix_pubsub, :broadcast],
+      meta,
+      fn ->
+        res = dispatch(pubsub, :none, topic, message, dispatcher)
+        {res, meta}
+      end
+    )
   end
 
   @doc """
@@ -203,7 +243,16 @@ defmodule Phoenix.PubSub do
   @spec local_broadcast_from(t, pid, topic, message, dispatcher) :: :ok
   def local_broadcast_from(pubsub, from, topic, message, dispatcher \\ __MODULE__)
       when is_atom(pubsub) and is_pid(from) and is_binary(topic) and is_atom(dispatcher) do
-    dispatch(pubsub, from, topic, message, dispatcher)
+    meta = %{type: :local_broadcast_from, dispatcher: dispatcher}
+
+    :telemetry.span(
+      [:phoenix_pubsub, :broadcast],
+      meta,
+      fn ->
+        res = dispatch(pubsub, from, topic, message, dispatcher)
+        {res, meta}
+      end
+    )
   end
 
   @doc """
@@ -223,8 +272,17 @@ defmodule Phoenix.PubSub do
   @spec direct_broadcast(t, topic, message, dispatcher) :: :ok | {:error, term}
   def direct_broadcast(node_name, pubsub, topic, message, dispatcher \\ __MODULE__)
       when is_atom(pubsub) and is_binary(topic) and is_atom(dispatcher) do
-    {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
-    adapter.direct_broadcast(name, node_name, topic, message, dispatcher)
+    meta = %{type: :direct_broadcast, dispatcher: dispatcher}
+
+    :telemetry.span(
+      [:phoenix_pubsub, :broadcast],
+      meta,
+      fn ->
+        {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+        res = adapter.direct_broadcast(name, node_name, topic, message, dispatcher)
+        {res, meta}
+      end
+    )
   end
 
   @doc """
