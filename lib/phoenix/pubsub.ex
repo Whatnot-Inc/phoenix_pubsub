@@ -347,7 +347,7 @@ defmodule Phoenix.PubSub do
   end
 
   defp dispatch(pubsub, from, topic, message, dispatcher) do
-    Registry.dispatch(pubsub, topic, {dispatcher, :dispatch, [from, message]})
+    Registry.dispatch(pubsub, topic, {dispatcher, :dispatch, [from, message]}, parallel: true)
     :ok
   end
 end
