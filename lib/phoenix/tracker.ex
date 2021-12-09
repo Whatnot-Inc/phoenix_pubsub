@@ -24,7 +24,7 @@ defmodule Phoenix.Tracker do
         use Phoenix.Tracker
 
         def start_link(opts) do
-          opts = Keyword.merge([name: __MODULE__], opts)
+         opts = Keyword.merge([name: __MODULE__], opts)
           Phoenix.Tracker.start_link(__MODULE__, opts, opts)
         end
 
