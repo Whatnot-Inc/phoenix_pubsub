@@ -67,12 +67,12 @@ defmodule Phoenix.PubSub.PG2 do
 
   @impl true
   def init({name, adapter_name, pool_size}) do
-    [_ | groups] =
+    groups =
       for number <- 1..pool_size do
         :"#{adapter_name}_#{number}"
       end
 
-    # Use `adapter_name` for the first in the pool for backwards compatability
+    # Add an `adapter_name` group for the first in the pool for backwards compatability
     # with v2.0 when the pool_size is 1.
     groups = [adapter_name | groups]
 
