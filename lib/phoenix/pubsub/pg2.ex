@@ -72,7 +72,8 @@ defmodule Phoenix.PubSub.PG2 do
         :"#{adapter_name}_#{number}"
       end
 
-    :persistent_term.put(adapter_name, List.to_tuple(groups))
+    [first_group | _] = groups
+    :persistent_term.put(adapter_name, List.to_tuple([first_group]))
 
     children =
       for group <- groups do
