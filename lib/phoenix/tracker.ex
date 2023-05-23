@@ -130,9 +130,14 @@ defmodule Phoenix.Tracker do
   """
   @spec track(atom, pid, topic, term, map) :: {:ok, ref :: binary} | {:error, reason :: term}
   def track(tracker_name, pid, topic, key, meta) when is_pid(pid) and is_map(meta) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> GenServer.call({:track, pid, topic, key, meta})
+    # Take the result of track for the shard 0, as that's what we've been writing
+    # too all the time.
+    [result | _] =
+      for shard <- dual_write_shards(tracker_name, topic) do
+        GenServer.call(shard, {:track, pid, topic, key, meta})
+      end
+
+    result
   end
 
   @doc """
@@ -155,13 +160,24 @@ defmodule Phoenix.Tracker do
   """
   @spec untrack(atom, pid, topic, term) :: :ok
   def untrack(tracker_name, pid, topic, key) when is_pid(pid) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> GenServer.call({:untrack, pid, topic, key})
+    for shard <- dual_write_shards(tracker_name, topic) do
+      GenServer.call(shard, {:untrack, pid, topic, key})
+    end
+
+    :ok
   end
+
   def untrack(tracker_name, pid) when is_pid(pid) do
     shard_multicall(tracker_name, {:untrack, pid})
     :ok
+  end
+
+  defp dual_write_shards(tracker_name, topic) do
+    [
+      Shard.name_for_number(tracker_name, 0),
+      Shard.name_for_topic(tracker_name, topic, pool_size(tracker_name))
+    ]
+    |> Enum.uniq()
   end
 
   @doc """
@@ -183,12 +199,20 @@ defmodule Phoenix.Tracker do
       iex> Phoenix.Tracker.update(MyTracker, self(), "lobby", u.id, fn meta -> Map.put(meta, :away, true) end)
       {:ok, "1WpAofWYIAA="}
   """
-  @spec update(atom, pid, topic, term, map | (map -> map)) :: {:ok, ref :: binary} | {:error, reason :: term}
-  def update(tracker_name, pid, topic, key, meta) when is_pid(pid) and (is_map(meta) or is_function(meta)) do
-    tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
-    |> GenServer.call({:update, pid, topic, key, meta})
-  end
+  @spec update(atom, pid, topic, term, map | (map -> map)) ::
+          {:ok, ref :: binary} | {:error, reason :: term}
+  def update(tracker_name, pid, topic, key, meta)
+      when is_pid(pid) and (is_map(meta) or is_function(meta)) do
+
+    # Take the result of track for the shard 0, as that's what we've been writing
+    # too all the time.
+    [result | _] =
+      for shard <- dual_write_shards(tracker_name, topic) do
+        GenServer.call(shard, {:update, pid, topic, key, meta})
+      end
+      
+      result
+   end
 
   @doc """
   Lists all presences tracked under a given topic.
@@ -206,7 +230,7 @@ defmodule Phoenix.Tracker do
   @spec list(atom, topic) :: [presence]
   def list(tracker_name, topic) do
     tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
+    |> Shard.name_for_number(0)
     |> Phoenix.Tracker.Shard.dirty_list(topic)
   end
 
@@ -227,7 +251,7 @@ defmodule Phoenix.Tracker do
   @spec get_by_key(atom, topic, term) :: [presence]
   def get_by_key(tracker_name, topic, key) do
     tracker_name
-    |> Shard.name_for_topic(topic, pool_size(tracker_name))
+    |> Shard.name_for_number(0)
     |> Phoenix.Tracker.Shard.get_by_key(topic, key)
   end
 
