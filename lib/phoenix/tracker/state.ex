@@ -96,6 +96,27 @@ defmodule Phoenix.Tracker.State do
   end
 
   @doc """
+  Updates an element via leave and join.
+
+  Atomically updates ETS local entry.
+  """
+  @spec leave_join(t, pid, topic, key, meta) :: t
+  def leave_join(%State{delta: delta} = state, pid, topic, key, meta) do
+    # Produce remove-like delta
+    [{{^topic, ^pid, ^key}, _meta, tag}] = :ets.lookup(state.values, {topic, pid, key})
+    pruned_clouds = delete_tag(state.clouds, tag)
+    new_delta = remove_delta_tag(state.delta, tag)
+    state = bump_clock(%State{state | clouds: pruned_clouds, delta: new_delta})
+
+    # Update ETS entry and produce add-like delta
+    state = bump_clock(state)
+    tag = tag(state)
+    true = :ets.insert(state.values, {{topic, pid, key}, meta, tag})
+    new_delta = %State{delta | values: Map.put(delta.values, tag, {pid, topic, key, meta})}
+    %State{state | delta: new_delta}
+  end
+
+  @doc """
   Removes an element from the set.
   """
   @spec leave(t, pid, topic, key) :: t
@@ -315,9 +336,31 @@ defmodule Phoenix.Tracker.State do
   defp merge(local, remote, remote_map) do
     {pids, joins, tags} = accumulate_joins(local, remote_map)
     {clouds, delta, leaves} = observe_removes(local, remote, remote_map)
+
+    # We diff ETS deletes and inserts, this way if there is an update
+    # operation (leave + join) we handle it atomically via insert into
+    # the :ordered_set table
+
+    added_value_keys = for {value_key, _meta, _tag} <- joins, do: value_key
+    removed_value_keys = for {value_key, _meta, _tag} <- leaves, do: value_key
+    value_keys_to_remove = removed_value_keys -- added_value_keys
+
+    removed_pids = for {{topic, pid, key}, _meta, _tag} <- leaves, do: {pid, topic, key}
+    pids_to_remove = removed_pids -- pids
+    pids_to_add = pids -- removed_pids
+
+    for value_key <- value_keys_to_remove do
+      :ets.delete(local.values, value_key)
+    end
+
+    for pid <- pids_to_remove do
+      :ets.match_delete(local.pids, pid)
+    end
+
     true = :ets.insert(local.values, joins)
-    true = :ets.insert(local.pids, pids)
+    true = :ets.insert(local.pids, pids_to_add)
     true = :ets.insert(local.tags, tags)
+
     known_remote_context = Map.take(remote.context, Map.keys(local.context))
     ctx = Clock.upperbound(local.context, known_remote_context)
     new_state =
@@ -368,10 +411,14 @@ defmodule Phoenix.Tracker.State do
       end
     end)
 
+    # Only the tags table entry is deleted eagerly here. The values and pids
+    # entries are deleted later, in merge/3, after diffing against joins, so
+    # that an update (leave + join for the same values_key) becomes a single
+    # ETS overwrite instead of a transient delete followed by insert.
     Enum.reduce(tags_to_remove, init, fn tag, {clouds, delta, leaves} ->
       with [{_tag, values_key}] <- :ets.lookup(tags, tag),
            [el] <- :ets.lookup(values, values_key) do
-        delete_value_from_ets(local, values_key, tag)
+        :ets.delete(tags, tag)
         {delete_tag(clouds, tag), remove_delta_tag(delta, tag), [el | leaves]}
       else _ ->
         {clouds, delta, leaves}
@@ -390,7 +437,7 @@ defmodule Phoenix.Tracker.State do
   # replicas that the remote replica was seeing. This is not true for regular
   # heartbeats (delta broadcasts).
   defp observe_removes(
-    %State{values: values, delta: delta} = local,
+    %State{tags: tags, values: values, delta: delta} = local,
     %State{context: remote_context, clouds: remote_clouds} = remote,
     remote_map
   ) do
@@ -404,9 +451,9 @@ defmodule Phoenix.Tracker.State do
       [:"$_"]
     }]
 
-    foldl(values, init, ms, fn {values_key, _, tag} = el, {clouds, delta, leaves} ->
+    foldl(values, init, ms, fn {_values_key, _, tag} = el, {clouds, delta, leaves} ->
       if not match?(%{^tag => _}, remote_map) and in?(remote_context, remote_clouds, tag) do
-        delete_value_from_ets(local, values_key, tag)
+        :ets.delete(tags, tag)
         {delete_tag(clouds, tag), remove_delta_tag(delta, tag), [el | leaves]}
       else
         {clouds, delta, leaves}
