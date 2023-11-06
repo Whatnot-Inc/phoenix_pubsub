@@ -161,6 +161,19 @@ defmodule Phoenix.Tracker.State do
         [{{:"$1", :"$2"}}]}])
   end
 
+  def tracked_key(table, key, down_replicas) do
+    :ets.select(
+      table,
+      [
+        {
+          {{:"$1", :"$2", key}, :"$3", {:"$4", :_}},
+          not_in(:"$4", down_replicas),
+          [{{:"$1", :"$2", :"$3"}}]
+        }
+      ]
+    )
+  end
+
   defp not_in(_pos, []), do: []
   defp not_in(pos, replicas), do: [not: ors(pos, replicas)]
   defp ors(pos, [rep]), do: {:"=:=", pos, {rep}}
