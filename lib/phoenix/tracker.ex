@@ -248,27 +248,10 @@ defmodule Phoenix.Tracker do
   @spec dirty_get_by_key(atom, term) :: [{topic, pid, meta :: map()}]
   def dirty_get_by_key(tracker_name, key) do
     0..(pool_size(tracker_name) - 1)
-    |> Task.async_stream(
-      fn n ->
-        shard_name = Shard.name_for_number(tracker_name, n)
+    |> Enum.flat_map(fn n ->
+      shard_name = Shard.name_for_number(tracker_name, n)
 
-        Phoenix.Tracker.Shard.dirty_get_by_key(shard_name, key)
-      end,
-      on_timeout: :kill_task,
-      zip_input_on_exit: true
-    )
-    |> Enum.flat_map(fn
-      {:ok, presences} ->
-        presences
-
-      {:exit, {shard_n, reason}} ->
-        Logger.warning("Failed to fetch presences by key",
-          key: key,
-          shard: shard_n,
-          error: inspect(reason)
-        )
-
-        []
+      Phoenix.Tracker.Shard.dirty_get_by_key(shard_name, key)
     end)
   end
 
