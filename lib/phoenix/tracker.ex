@@ -255,16 +255,19 @@ defmodule Phoenix.Tracker do
     end)
   end
 
-  @spec dirty_get_by_key_with_limit(atom, term, integer()) :: [{topic, pid, meta :: map()}]
+  @spec dirty_get_by_key_with_limit(atom, term, integer()) :: [presence]
   def dirty_get_by_key_with_limit(tracker_name, key, limit) do
     upper_bound_limit_per_shard = ceil(limit / pool_size(tracker_name))
-    0..(pool_size(tracker_name) - 1)
-    |> Enum.flat_map(fn n ->
-      shard_name = Shard.name_for_number(tracker_name, n)
+    # 0..(pool_size(tracker_name) - 1)
+    # |> Enum.flat_map(fn n ->
+    #   shard_name = Shard.name_for_number(tracker_name, n)
 
-      Phoenix.Tracker.Shard.dirty_get_by_key_with_limit(shard_name, key, upper_bound_limit_per_shard)
-    end)
-    |> Enum.take(limit)
+    #   Phoenix.Tracker.Shard.dirty_get_by_key_with_limit(shard_name, key, upper_bound_limit_per_shard)
+    # end)
+    # |> Enum.take(limit)
+    shard_number = Enum.random(0..(pool_size(tracker_name) - 1))
+    shard_name = Shard.name_for_number(tracker_name, shard_number)
+    Phoenix.Tracker.Shard.dirty_get_by_key_with_limit(shard_name, key, upper_bound_limit_per_shard)
   end
 
   @doc """
