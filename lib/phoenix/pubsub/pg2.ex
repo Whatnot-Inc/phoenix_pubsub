@@ -88,14 +88,9 @@ defmodule Phoenix.PubSub.PG2 do
   end
 
   defp groups(adapter_name, pool_size) do
-    [_ | groups] =
-      for number <- 1..pool_size do
-        :"#{adapter_name}_#{number}"
-      end
-
-    # Use `adapter_name` for the first in the pool for backwards compatibility
-    # with v2.0 when the pool_size is 1.
-    [adapter_name | groups]
+    for number <- 1..pool_size do
+      :"#{adapter_name}_#{number}"
+    end
   end
 end
 
