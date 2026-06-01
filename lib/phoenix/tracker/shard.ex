@@ -370,6 +370,18 @@ defmodule Phoenix.Tracker.Shard do
 
   defp request_transfer_from_replicas_needing_synced(%{current_sample_count: 1} = state) do
     needs_synced = clockset_to_sync(state)
+
+    case needs_synced do
+      [] -> :ok
+      _ ->
+        log state, fn ->
+          "#{state.replica.name}: clock sync needed with #{length(needs_synced)} replicas " <>
+            "(pending clockset size=#{length(state.pending_clockset)})"
+        end,
+        sync_replicas: needs_synced,
+        pending_clockset: state.pending_clockset
+    end
+
     for replica <- needs_synced, do: request_transfer(state, replica)
 
     %{state | pending_clockset: [], current_sample_count: state.clock_sample_periods}
@@ -429,9 +441,9 @@ defmodule Phoenix.Tracker.Shard do
     log state, fn -> "#{state.replica.name}: replica up from #{inspect remote_replica.name}" end
     {presences, joined, []} = State.replica_up(state.presences, Replica.ref(remote_replica))
 
-    log state,
-        fn -> "#{state.replica.name}: #{length(joined)} users joined from replica #{inspect remote_replica.name}" end,
-        sample: sample_users(joined)
+    log state, fn ->
+      "#{state.replica.name}: #{length(joined)} users joined from replica #{inspect remote_replica.name}"
+    end
 
     state
     |> report_diff(joined, [])
@@ -443,20 +455,13 @@ defmodule Phoenix.Tracker.Shard do
     log state, fn -> "#{state.replica.name}: replica down from #{inspect remote_replica.name}" end
     {presences, [], left} = State.replica_down(state.presences, Replica.ref(remote_replica))
 
-    log state,
-        fn -> "#{state.replica.name}: #{length(left)} users left from replica #{inspect remote_replica.name}" end,
-        sample: sample_users(left)
+    log state, fn ->
+      "#{state.replica.name}: #{length(left)} users left from replica #{inspect remote_replica.name}"
+    end
 
     state
     |> report_diff([], left)
     |> put_presences(presences)
-  end
-
-  @sample_size 5
-  defp sample_users(values) do
-    values
-    |> Enum.take(@sample_size)
-    |> Enum.map(fn {{_topic, _pid, key}, meta, _tag} -> %{key: key, meta: meta} end)
   end
 
   defp permdown(state, %Replica{name: name} = remote_replica) do
