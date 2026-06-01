@@ -396,6 +396,121 @@ defmodule Phoenix.Tracker.ShardReplicationTest do
     assert_receive {{:replica_permdown, @node1}, @primary}, permdown_period * 2
   end
 
+  # Regression test: a transient peer that's graceful_permdown'd must not
+  # trigger spurious transfer_req between the two surviving peers.
+  #
+  # Setup: primary + node1 are running. We inject a fake "ghost" peer by
+  # broadcasting one heartbeat from it; both peers add the ghost to their
+  # replica map. Then we send the same `{:pub, :graceful_permdown, ghost_ref}`
+  # message that `Phoenix.Tracker.graceful_permdown` would send. Each receiver
+  # runs `state |> down(replica) |> permdown(replica)` synchronously on
+  # receipt.
+  #
+  # In production the delivery skew of that broadcast between two peers is
+  # milliseconds to tens of milliseconds (real network + process scheduling),
+  # which is enough to open the bug's window. In test with both peers as local
+  # subscribers, a single `Phoenix.PubSub.broadcast!` delivers in
+  # microseconds — too narrow. To reproduce the production-shape skew we use
+  # `direct_broadcast!` to deliver to primary first, give it long enough to
+  # broadcast a heartbeat with the new clock shape (so the asymmetry lands in
+  # node1's pending_clockset), then deliver to node1.
+  #
+  # Note on when transfer_req fires: receiving a peer's heartbeat only adds
+  # the clock to pending_clockset; it does not immediately trigger a transfer.
+  # `clockset_to_sync` runs at the next `:heartbeat` tick where
+  # `current_sample_count == 1`, i.e. every `clock_sample_periods` heartbeats
+  # (default 2). The sleep below has to cover one of primary's heartbeats
+  # (for the new clock shape to ship) and a clockset sample tick on the
+  # receiving side.
+  @tag tracker_opts: [permdown_period: 30_000]
+  test "graceful_permdown of a transient peer does not trigger transfers between surviving peers",
+       %{shard: shard_name, topic: topic, tracker_opts: tracker_opts} do
+    spy_on_server(@primary, self(), shard_name)
+    spy_on_server(@node1, self(), shard_name)
+
+    {_, {:ok, _}} = start_shard(@node1, tracker_opts)
+    assert_receive {{:replica_up, @primary}, @node1}, @timeout * 3
+    assert_receive {{:replica_up, @node1}, @primary}, @timeout * 3
+
+    # Give each peer one local presence so its context has a non-zero value
+    # for itself; otherwise the clock comparison degenerates.
+    track_presence(@primary, shard_name, spawn_pid(), topic, "primary_u1", %{})
+    track_presence(@node1, shard_name, spawn_pid(), topic, "node1_u1", %{})
+    Process.sleep(200)
+    flush()
+
+    # Inject a "ghost" replica into both peers by broadcasting a single
+    # heartbeat from a fake address.
+    ghost_name = :"ghost@127.0.0.1"
+    ghost_ref = {ghost_name, System.unique_integer([:positive])}
+    ghost_clock = {ghost_name, %{ghost_name => 0}}
+    namespaced_topic = "phx_presence:#{shard_name}"
+
+    Phoenix.PubSub.broadcast!(
+      Phoenix.PubSubTest,
+      namespaced_topic,
+      {:pub, :heartbeat, ghost_ref, :empty, ghost_clock}
+    )
+
+    assert_receive {{:replica_up, ^ghost_name}, @primary}, @timeout * 3
+    assert_receive {{:replica_up, ^ghost_name}, @node1}, @timeout * 3
+
+    # Deliver the graceful_permdown message to primary first.
+    Phoenix.PubSub.direct_broadcast!(
+      @primary,
+      Phoenix.PubSubTest,
+      namespaced_topic,
+      {:pub, :graceful_permdown, ghost_ref}
+    )
+
+    assert_receive {{:replica_permdown, ^ghost_name}, @primary}, @timeout * 3
+
+    # Give primary long enough to broadcast a heartbeat with ghost dropped
+    # from its clock so the asymmetry has time to land in node1's
+    # pending_clockset and then for a clockset sample tick to fire.
+    Process.sleep(@heartbeat * 2)
+
+    Phoenix.PubSub.direct_broadcast!(
+      @node1,
+      Phoenix.PubSubTest,
+      namespaced_topic,
+      {:pub, :graceful_permdown, ghost_ref}
+    )
+
+    assert_receive {{:replica_permdown, ^ghost_name}, @node1}, @timeout * 3
+
+    # Capture any transfer_req between primary and node1 across the settling
+    # window after permdown.
+    transfer_reqs = collect_transfer_reqs(500, [@primary, @node1])
+
+    assert transfer_reqs == [],
+           "expected no transfer_req between primary and node1, got: " <>
+             inspect(transfer_reqs, pretty: true)
+  end
+
+  defp collect_transfer_reqs(timeout_ms, peers) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_collect_transfer_reqs([], deadline, peers)
+  end
+
+  defp do_collect_transfer_reqs(acc, deadline, peers) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {to, {:pub, :transfer_req, _ref, {from, _vsn}, _clocks}} when remaining > 0 ->
+        if from in peers and to in peers do
+          do_collect_transfer_reqs([{from, to} | acc], deadline, peers)
+        else
+          do_collect_transfer_reqs(acc, deadline, peers)
+        end
+
+      _other when remaining > 0 ->
+        do_collect_transfer_reqs(acc, deadline, peers)
+    after
+      remaining -> Enum.reverse(acc)
+    end
+  end
+
   test "handle_info callback with bad return", %{shard_pid: shard_pid} do
     Process.unlink(shard_pid)
     ref = Process.monitor(shard_pid)
