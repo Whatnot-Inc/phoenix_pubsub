@@ -15,20 +15,31 @@ defmodule Phoenix.Tracker.Clock do
 
   @doc """
   Adds a replicas context to a clockset, keeping only dominate contexts.
+
+  Dominance is evaluated on the intersection of replicas the two clocks have
+  in common (see `dominates_on_shared?/2`). Replicas present in one clock but
+  not the other are treated as "ignored" for the comparison. This avoids
+  spurious transfer requests when peers drop different replicas from their
+  broadcast clocks at slightly different times (e.g. during independent
+  down-detection of the same dead peer).
   """
   @spec append_clock([clock], clock) :: [clock]
   def append_clock(clockset, {_, clock}) when map_size(clock) == 0, do: clockset
   def append_clock(clockset, {node, clock}) do
     big_clock = combine_clocks(clockset)
     cond do
-      dominates?(clock, big_clock) -> [{node, clock}]
-      dominates?(big_clock, clock) -> clockset
+      dominates_on_shared?(clock, big_clock) -> [{node, clock}]
+      dominates_on_shared?(big_clock, clock) -> clockset
       true -> filter_clocks(clockset, {node, clock})
     end
   end
 
   @doc """
   Checks if one clock causally dominates the other for all replicas.
+
+  Strict dominance: `c1` dominates `c2` iff `c1` has every replica `c2` has
+  with a value at least as large. A replica missing from `c1` is treated as
+  having value 0, so a smaller clock cannot dominate a larger one.
   """
   @spec dominates?(context, context) :: boolean
   def dominates?(c1, c2) when map_size(c1) < map_size(c2), do: false
@@ -38,6 +49,26 @@ defmodule Phoenix.Tracker.Clock do
         {:cont, true}
       else
         {:halt, false}
+      end
+    end)
+  end
+
+  @doc """
+  Checks if `c1` dominates `c2` considering only replicas they share.
+
+  Unlike `dominates?/2`, replicas present in `c2` but absent from `c1` are
+  treated as ignored (vacuously matched) rather than as zero. This is the
+  semantics `append_clock/2` and `filter_clocks/2` use, so that two peers'
+  clocks can agree on the live replicas they share even when one has
+  dropped a down or permdowned replica that the other still tracks.
+  """
+  @spec dominates_on_shared?(context, context) :: boolean
+  def dominates_on_shared?(c1, c2) do
+    Enum.reduce_while(c2, true, fn {replica, clock}, true ->
+      case c1 do
+        %{^replica => c1_clock} when c1_clock >= clock -> {:cont, true}
+        %{^replica => _} -> {:halt, false}
+        _ -> {:cont, true}
       end
     end)
   end
@@ -84,10 +115,10 @@ defmodule Phoenix.Tracker.Clock do
   defp filter_clocks(clockset, {node, clock}) do
     clockset
     |> Enum.reduce({[], false}, fn {node2, clock2}, {set, insert} ->
-      if dominates?(clock, clock2) do
+      if dominates_on_shared?(clock, clock2) do
         {set, true}
       else
-        {[{node2, clock2}| set], insert || !dominates?(clock2, clock)}
+        {[{node2, clock2}| set], insert || !dominates_on_shared?(clock2, clock)}
       end
     end)
     |> case do
