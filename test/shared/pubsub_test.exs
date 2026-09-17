@@ -181,18 +181,18 @@ defmodule Phoenix.PubSubTest do
   @tag registry_size: 2
   test "PubSub pool size can be configured separately from the Registry partitions",
        config do
-    assert {:duplicate, 2, _} = :ets.lookup_element(config.pubsub, -2, 2)
+    assert {{:duplicate, :pid}, 2, _} = :ets.lookup_element(config.pubsub, -2, 2)
 
     assert :persistent_term.get(config.adapter_name) ==
-      {config.adapter_name, :"#{config.adapter_name}_2", :"#{config.adapter_name}_3", :"#{config.adapter_name}_4"}
+      {:"#{config.adapter_name}_1", :"#{config.adapter_name}_2", :"#{config.adapter_name}_3", :"#{config.adapter_name}_4"}
   end
 
   @tag pool_size: 3
   test "Registry partitions are configured with the same pool size as PubSub if not specified",
        config do
-    assert {:duplicate, 3, _} = :ets.lookup_element(config.pubsub, -2, 2)
+    assert {{:duplicate, :pid}, 3, _} = :ets.lookup_element(config.pubsub, -2, 2)
 
     assert :persistent_term.get(config.adapter_name) ==
-      {config.adapter_name, :"#{config.adapter_name}_2", :"#{config.adapter_name}_3"}
+      {:"#{config.adapter_name}_1", :"#{config.adapter_name}_2", :"#{config.adapter_name}_3"}
   end
 end
