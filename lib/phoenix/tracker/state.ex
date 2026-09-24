@@ -101,17 +101,25 @@ defmodule Phoenix.Tracker.State do
   Atomically updates ETS local entry.
   """
   @spec leave_join(t, pid, topic, key, meta) :: t
-  def leave_join(state, pid, topic, key, meta) do
+  def leave_join(%State{tags: tags} = state, pid, topic, key, meta) do
     # Produce remove-like delta
-    [{{^topic, ^pid, ^key}, _meta, tag}] = :ets.lookup(state.values, {topic, pid, key})
-    pruned_clouds = delete_tag(state.clouds, tag)
-    new_delta = remove_delta_tag(state.delta, tag)
+    values_key = {topic, pid, key}
+    [{^values_key, _meta, prev_tag}] = :ets.lookup(state.values, values_key)
+    pruned_clouds = delete_tag(state.clouds, prev_tag)
+    new_delta = remove_delta_tag(state.delta, prev_tag)
     state = bump_clock(%State{state | clouds: pruned_clouds, delta: new_delta})
 
     # Update ETS entry and produce add-like delta
     state = bump_clock(state)
     tag = tag(state)
-    true = :ets.insert(state.values, {{topic, pid, key}, meta, tag})
+    true = :ets.insert(state.values, {values_key, meta, tag})
+    # The tags table is our own lookup index on top of upstream's design (see
+    # observe_removes/3), so it must stay in sync here too: leaving the old
+    # tag mapped to this row would let a stale remote removal delete the
+    # updated value, and never mapping the new tag would make
+    # remove_down_replicas/2 miss this row entirely.
+    true = :ets.delete(tags, prev_tag)
+    true = :ets.insert(tags, {tag, values_key})
     new_delta = %State{state.delta | values: Map.put(state.delta.values, tag, {pid, topic, key, meta})}
     %State{state | delta: new_delta}
   end
