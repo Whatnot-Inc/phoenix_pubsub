@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  mix_test:
+    name: mix test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.2
+          otp-version: 28.5.0.2
+
+      - name: Restore deps and _build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: deps-${{ runner.os }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+        env:
+          MIX_ENV: test
+
+      # test/support/cluster.ex still spawns nodes via the deprecated :slave
+      # API, which needs a local SSH daemon that CI runners don't have by
+      # default. Upstream has since migrated to the :peer module, which
+      # doesn't need SSH - once we backport that, this exclusion can go away.
+      - name: Run tests
+        run: mix test --exclude clustered
