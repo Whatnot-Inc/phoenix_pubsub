@@ -62,23 +62,47 @@ defmodule Phoenix.Tracker do
   An optional `handle_info/2` callback may also be invoked to handle
   application specific messages within your tracker.
 
-  ## Special Considerations
+  ## Stability and Performance Considerations
 
   Operations within `handle_diff/2` happen *in the tracker server's context*.
   Therefore, blocking operations should be avoided when possible, and offloaded
   to a supervised task when required. Also, a crash in the `handle_diff/2` will
   crash the tracker server, so operations that may crash the server should be
   offloaded with a `Task.Supervisor` spawned process.
+
+  ## Application Shutdown
+
+  When a tracker shuts down, the other nodes do not assume it is gone
+  for good. After all, in a distributed system, it is impossible to know if something
+  is just temporarily unavailable or if it has crashed.
+
+  For this reason, when you call `System.stop()` or the Erlang VM receives a
+  `SIGTERM`, any presences that the local tracker instance has will continue to
+  be seen as present by other trackers in the cluster until the `:down_period`
+  for the instance has passed.
+
+  If you want a normal shutdown to immediately cause other nodes to see that
+  tracker's presences as leaving, pass `permdown_on_shutdown: true`. On the
+  other hand, if you are using `Phoenix.Presence` for clients which will
+  immediately attempt to connect to a new node, it may be preferable to use
+  `permdown_on_shutdown: false`, allowing the disconnected clients time to
+  reconnect before removing their old presences, to avoid overwhelming clients
+  with notifications that many users left and immediately rejoined.
+
+  If the application crashes or is halted non-gracefully (for instance, with a
+  `SIGKILL` or a `Ctrl+C` in `iex`), other nodes will still have to wait the
+  `:down_period` to notice that the tracker's presences are gone.
   """
+
   use Supervisor
-  require Logger
   alias Phoenix.Tracker.Shard
 
-  @type presence :: {key :: String.t, meta :: map}
-  @type topic :: String.t
+  @type presence :: {key :: String.t(), meta :: map}
+  @type topic :: String.t()
 
-  @callback init(Keyword.t) :: {:ok, state :: term} | {:error, reason :: term}
-  @callback handle_diff(%{topic => {joins :: [presence], leaves :: [presence]}}, state :: term) :: {:ok, state :: term}
+  @callback init(Keyword.t()) :: {:ok, state :: term} | {:error, reason :: term}
+  @callback handle_diff(%{topic => {joins :: [presence], leaves :: [presence]}}, state :: term) ::
+              {:ok, state :: term}
   @callback handle_info(message :: term, state :: term) :: {:noreply, state :: term}
   @optional_callbacks handle_info: 2
 
@@ -111,7 +135,7 @@ defmodule Phoenix.Tracker do
   @doc """
   Tracks a presence.
 
-    * `server_name` - The registered name of the tracker server
+    * `tracker_name` - The registered name of the tracker server
     * `pid` - The Pid to track
     * `topic` - The `Phoenix.PubSub` topic for this presence
     * `key` - The key identifying this presence
@@ -138,7 +162,7 @@ defmodule Phoenix.Tracker do
   @doc """
   Untracks a presence.
 
-    * `server_name` - The registered name of the tracker server
+    * `tracker_name` - The registered name of the tracker server
     * `pid` - The Pid to untrack
     * `topic` - The `Phoenix.PubSub` topic to untrack for this presence
     * `key` - The key identifying this presence
@@ -167,7 +191,7 @@ defmodule Phoenix.Tracker do
   @doc """
   Updates a presence's metadata.
 
-    * `server_name` - The registered name of the tracker server
+    * `tracker_name` - The registered name of the tracker server
     * `pid` - The Pid being tracked
     * `topic` - The `Phoenix.PubSub` topic to update for this presence
     * `key` - The key identifying this presence
@@ -193,10 +217,10 @@ defmodule Phoenix.Tracker do
   @doc """
   Lists all presences tracked under a given topic.
 
-    * `server_name` - The registered name of the tracker server
+    * `tracker_name` - The registered name of the tracker server
     * `topic` - The `Phoenix.PubSub` topic
 
-  Returns a lists of presences in key/metadata tuple pairs.
+  Returns a list of presences in key/metadata tuple pairs.
 
   ## Examples
 
@@ -220,18 +244,18 @@ defmodule Phoenix.Tracker do
   @doc """
   Gets presences tracked under a given topic and key pair.
 
-    * `server_name` - The registered name of the tracker server
+    * `tracker_name` - The registered name of the tracker server
     * `topic` - The `Phoenix.PubSub` topic
     * `key` - The key of the presence
 
-  Returns a lists of presence metadata.
+  Returns a list of presence metadata.
 
   ## Examples
 
       iex> Phoenix.Tracker.get_by_key(MyTracker, "lobby", "user1")
-      [{#PID<0.88.0>, %{name: "User 1"}, {#PID<0.89.0>, %{name: "User 1"}]
+      [{#PID<0.88.0>, %{name: "User 1"}}, {#PID<0.89.0>, %{name: "User 1"}}]
   """
-  @spec get_by_key(atom, topic, term) :: [presence]
+  @spec get_by_key(atom, topic, term) :: [{pid, map}]
   def get_by_key(tracker_name, topic, key) do
     tracker_name
     |> Shard.name_for_topic(topic, pool_size(tracker_name))
@@ -302,6 +326,11 @@ defmodule Phoenix.Tracker do
     * `:down_period` - The interval in milliseconds to flag a replica
       as temporarily down. Default `broadcast_period * max_silent_periods * 2`
       (30s down detection). Note: This must be at least 2x the `broadcast_period`.
+    * `permdown_on_shutdown` - boolean; whether to immediately call
+      `graceful_permdown/1` on the tracker during a graceful shutdown. See
+      'Application Shutdown' section. You can only safely set this if `Phoenix.Tracker`
+      is mounted at the root of your supervision tree and the strategy is `:one_for_one`.
+      Default `false`.
     * `:permdown_period` - The interval in milliseconds to flag a replica
       as permanently down, and discard its state.
       Note: This must be at least greater than the `down_period`.
@@ -322,6 +351,7 @@ defmodule Phoenix.Tracker do
   @impl true
   def init([tracker, tracker_opts, opts, name]) do
     pool_size = Keyword.get(opts, :pool_size, 1)
+    permdown_on_shutdown = Keyword.get(opts, :permdown_on_shutdown, false)
     ^name = :ets.new(name, [:set, :named_table, read_concurrency: true])
     true = :ets.insert(name, {:pool_size, pool_size})
 
@@ -332,8 +362,22 @@ defmodule Phoenix.Tracker do
 
         %{
           id: shard_name,
-          start: {Phoenix.Tracker.Shard, :start_link, [tracker, tracker_opts, shard_opts]}
+          start: {Phoenix.Tracker.Shard, :start_link, [tracker, tracker_opts, shard_opts]},
+          restart: :transient
         }
+      end
+
+    children =
+      if permdown_on_shutdown do
+        shards ++
+          [
+            %{
+              id: :shutdown_handler,
+              start: {Phoenix.Tracker.ShutdownHandler, :start_link, [tracker]}
+            }
+          ]
+      else
+        shards
       end
 
     opts = [
@@ -342,7 +386,7 @@ defmodule Phoenix.Tracker do
       max_seconds: 1
     ]
 
-    Supervisor.init(shards, opts)
+    Supervisor.init(children, opts)
   end
 
   defp pool_size(tracker_name) do

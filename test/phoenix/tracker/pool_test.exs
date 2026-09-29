@@ -28,7 +28,7 @@ defmodule Phoenix.Tracker.PoolTest do
           ref
         end
 
-      for {t, ref} <- List.zip([topics, refs]) do
+      for {t, ref} <- Enum.zip([topics, refs]) do
         assert Tracker.list(server, t) == [{"me", %{name: "me", phx_ref: ref}}]
       end
     end
@@ -106,7 +106,7 @@ defmodule Phoenix.Tracker.PoolTest do
           new_ref
         end
 
-      expected_changes = List.zip([topics, old_refs, new_refs])
+      expected_changes = Enum.zip([topics, old_refs, new_refs])
 
       for {t, old_ref, new_ref} <- expected_changes do
         assert [{"me", %{new: "thing", phx_ref: ^new_ref, phx_ref_prev: ^old_ref}}] =
@@ -133,7 +133,7 @@ defmodule Phoenix.Tracker.PoolTest do
           new_ref
         end
 
-      expected_changes = List.zip([topics, old_refs, new_refs])
+      expected_changes = Enum.zip([topics, old_refs, new_refs])
 
       for {t, old_ref, new_ref} <- expected_changes do
         assert [{"me", %{a: "newval", phx_ref: ^new_ref, phx_ref_prev: ^old_ref}}] =
