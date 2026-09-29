@@ -53,6 +53,6 @@ defmodule Phoenix.TrackerClockTest do
   test "replicas" do
     assert Clock.replicas(%{}) == []
     assert Clock.replicas(%{a: 1}) == [:a]
-    assert Clock.replicas(%{a: 1, b: 2}) == [:a, :b]
+    assert Enum.sort(Clock.replicas(%{a: 1, b: 2})) == [:a, :b]
   end
 end
