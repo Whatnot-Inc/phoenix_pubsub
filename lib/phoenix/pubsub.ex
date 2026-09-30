@@ -171,6 +171,13 @@ defmodule Phoenix.PubSub do
     * `:broadcast_pool_size` - number of pubsub partitions used for broadcasting messages
       (defaults to `:pool_size`). This option is used during pool size migrations to ensure
       no messages are lost. See the "Safe Pool Size Migration" section in the module documentation.
+    * `:group_by` - controls whether the underlying `Registry` partitions
+      subscriptions by `:pid` or by `:key` (defaults to `:pid`). With
+      `:pid`, entries are grouped by subscriber pid — best when topics
+      have many subscribers each. With `:key`, entries are grouped by
+      topic so key-based lookups touch a single partition — best when
+      there are many topics with few subscribers each. See
+      `Registry.start_link/1` for the underlying trade-offs.
 
   """
   @spec child_spec(keyword) :: Supervisor.child_spec()
