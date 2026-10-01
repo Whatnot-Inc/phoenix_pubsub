@@ -385,7 +385,7 @@ defmodule Phoenix.Tracker.State do
     end
 
     for pid <- pids_to_remove do
-      :ets.match_delete(local.pids, pid)
+      :ets.delete_object(local.pids, pid)
     end
 
     true = :ets.insert(local.values, joins)
@@ -497,7 +497,7 @@ defmodule Phoenix.Tracker.State do
 
   defp delete_value_from_ets(%State{pids: pids, tags: tags, values: values}, {topic, pid, key} = values_key, tag) do
     :ets.delete(values, values_key)
-    :ets.match_delete(pids, {pid, topic, key})
+    :ets.delete_object(pids, {pid, topic, key})
     :ets.delete(tags, tag)
   end
 

@@ -1,13 +1,13 @@
 defmodule Phoenix.PubSub.Mixfile do
   use Mix.Project
 
-  @version "2.2.0"
+  @version "2.3.0"
 
   def project do
     [
       app: :phoenix_pubsub,
       version: @version,
-      elixir: "~> 1.6",
+      elixir: "~> 1.13",
       name: "Phoenix.PubSub",
       description: "Distributed PubSub and Presence platform",
       homepage_url: "http://www.phoenixframework.org",

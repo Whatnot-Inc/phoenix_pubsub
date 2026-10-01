@@ -1,16 +1,22 @@
 name: CI
 
 on:
+  pull_request:
   push:
 
 jobs:
   mix_test:
     name: mix test
+
+    # prevent workflow jobs run twice on push and pull_request event
+    # see https://github.com/orgs/community/discussions/57827
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
+
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -36,9 +42,7 @@ jobs:
         env:
           MIX_ENV: test
 
-      # test/support/cluster.ex still spawns nodes via the deprecated :slave
-      # API, which needs a local SSH daemon that CI runners don't have by
-      # default. Upstream has since migrated to the :peer module, which
-      # doesn't need SSH - once we backport that, this exclusion can go away.
       - name: Run tests
-        run: mix test --exclude clustered
+        run: |
+          epmd -daemon
+          mix test

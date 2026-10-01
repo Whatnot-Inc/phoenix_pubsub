@@ -171,6 +171,17 @@ defmodule Phoenix.PubSub do
     * `:broadcast_pool_size` - number of pubsub partitions used for broadcasting messages
       (defaults to `:pool_size`). This option is used during pool size migrations to ensure
       no messages are lost. See the "Safe Pool Size Migration" section in the module documentation.
+    * `:dispatcher` - the default dispatcher module for broadcasts
+      (defaults to `Phoenix.PubSub`). Can be overridden per-call by
+      passing a dispatcher to `broadcast/4` and friends.
+    * `:group_by` - controls how the underlying `Registry` partitions
+      subscriptions, either `:pid` or `:key` (defaults to `:pid`). With
+      `:pid`, entries are grouped by subscriber pid — best when topics
+      have many subscribers each. With `:key`, entries are grouped by
+      topic so key-based lookups touch a single partition — best when
+      there are many topics with few subscribers each. `:key` requires
+      Elixir v1.19 or later. See `Registry.start_link/1` for the
+      underlying trade-offs.
 
   """
   @spec child_spec(keyword) :: Supervisor.child_spec()
@@ -217,6 +228,28 @@ defmodule Phoenix.PubSub do
   end
 
   @doc """
+  Unsubscribes the caller from the PubSub adapter's topic taking the metadata into consideration.
+
+  Unlike `unsubscribe/2`, this function matches on the metadata provided as an option when subscribed.
+  This is useful when you have multiple subscriptions for the same topic with different metadata.
+
+  ## Example
+
+      iex> PubSub.subscribe_match(:my_pubsub, "users:123", metadata: :fast)
+      :ok
+      iex> PubSub.subscribe_match(:my_pubsub, "users:123", metadata: :slow)
+      :ok
+      iex> PubSub.unsubscribe_match(:my_pubsub, "users:123", :fast)
+      :ok
+      # Only the :fast subscription is removed, :slow remains active
+
+  """
+  @spec unsubscribe_match(t, topic, term) :: :ok
+  def unsubscribe_match(pubsub, topic, metadata) when is_atom(pubsub) and is_binary(topic) do
+    Registry.unregister_match(pubsub, topic, metadata)
+  end
+
+  @doc """
   Broadcasts message on given topic across the whole cluster.
 
     * `pubsub` - The name of the pubsub system
@@ -227,9 +260,10 @@ defmodule Phoenix.PubSub do
   See the "Custom dispatching" section in the module documentation.
   """
   @spec broadcast(t, topic, message, dispatcher) :: :ok | {:error, term}
-  def broadcast(pubsub, topic, message, dispatcher \\ __MODULE__)
+  def broadcast(pubsub, topic, message, dispatcher \\ nil)
       when is_atom(pubsub) and is_binary(topic) and is_atom(dispatcher) do
-    {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+    {:ok, {adapter, name, default_dispatcher}} = Registry.meta(pubsub, :pubsub)
+    dispatcher = dispatcher || default_dispatcher
 
     with :ok <- adapter.broadcast(name, topic, message, dispatcher) do
       dispatch(pubsub, :none, topic, message, dispatcher)
@@ -251,9 +285,10 @@ defmodule Phoenix.PubSub do
   See the "Custom dispatching" section in the module documentation.
   """
   @spec broadcast_from(t, pid, topic, message, dispatcher) :: :ok | {:error, term}
-  def broadcast_from(pubsub, from, topic, message, dispatcher \\ __MODULE__)
+  def broadcast_from(pubsub, from, topic, message, dispatcher \\ nil)
       when is_atom(pubsub) and is_pid(from) and is_binary(topic) and is_atom(dispatcher) do
-    {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+    {:ok, {adapter, name, default_dispatcher}} = Registry.meta(pubsub, :pubsub)
+    dispatcher = dispatcher || default_dispatcher
 
     with :ok <- adapter.broadcast(name, topic, message, dispatcher) do
       dispatch(pubsub, from, topic, message, dispatcher)
@@ -271,9 +306,10 @@ defmodule Phoenix.PubSub do
   See the "Custom dispatching" section in the module documentation.
   """
   @spec local_broadcast(t, topic, message, dispatcher) :: :ok
-  def local_broadcast(pubsub, topic, message, dispatcher \\ __MODULE__)
+  def local_broadcast(pubsub, topic, message, dispatcher \\ nil)
       when is_atom(pubsub) and is_binary(topic) and is_atom(dispatcher) do
-    dispatch(pubsub, :none, topic, message, dispatcher)
+    {:ok, {_adapter, _name, default_dispatcher}} = Registry.meta(pubsub, :pubsub)
+    dispatch(pubsub, :none, topic, message, dispatcher || default_dispatcher)
   end
 
   @doc """
@@ -291,9 +327,10 @@ defmodule Phoenix.PubSub do
   See the "Custom dispatching" section in the module documentation.
   """
   @spec local_broadcast_from(t, pid, topic, message, dispatcher) :: :ok
-  def local_broadcast_from(pubsub, from, topic, message, dispatcher \\ __MODULE__)
+  def local_broadcast_from(pubsub, from, topic, message, dispatcher \\ nil)
       when is_atom(pubsub) and is_pid(from) and is_binary(topic) and is_atom(dispatcher) do
-    dispatch(pubsub, from, topic, message, dispatcher)
+    {:ok, {_adapter, _name, default_dispatcher}} = Registry.meta(pubsub, :pubsub)
+    dispatch(pubsub, from, topic, message, dispatcher || default_dispatcher)
   end
 
   @doc """
@@ -311,17 +348,17 @@ defmodule Phoenix.PubSub do
   See the "Custom dispatching" section in the module documentation.
   """
   @spec direct_broadcast(node_name, t, topic, message, dispatcher) :: :ok | {:error, term}
-  def direct_broadcast(node_name, pubsub, topic, message, dispatcher \\ __MODULE__)
+  def direct_broadcast(node_name, pubsub, topic, message, dispatcher \\ nil)
       when is_atom(pubsub) and is_binary(topic) and is_atom(dispatcher) do
-    {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
-    adapter.direct_broadcast(name, node_name, topic, message, dispatcher)
+    {:ok, {adapter, name, default_dispatcher}} = Registry.meta(pubsub, :pubsub)
+    adapter.direct_broadcast(name, node_name, topic, message, dispatcher || default_dispatcher)
   end
 
   @doc """
   Raising version of `broadcast/4`.
   """
   @spec broadcast!(t, topic, message, dispatcher) :: :ok
-  def broadcast!(pubsub, topic, message, dispatcher \\ __MODULE__) do
+  def broadcast!(pubsub, topic, message, dispatcher \\ nil) do
     case broadcast(pubsub, topic, message, dispatcher) do
       :ok -> :ok
       {:error, error} -> raise BroadcastError, "broadcast failed: #{inspect(error)}"
@@ -332,7 +369,7 @@ defmodule Phoenix.PubSub do
   Raising version of `broadcast_from/5`.
   """
   @spec broadcast_from!(t, pid, topic, message, dispatcher) :: :ok
-  def broadcast_from!(pubsub, from, topic, message, dispatcher \\ __MODULE__) do
+  def broadcast_from!(pubsub, from, topic, message, dispatcher \\ nil) do
     case broadcast_from(pubsub, from, topic, message, dispatcher) do
       :ok -> :ok
       {:error, error} -> raise BroadcastError, "broadcast failed: #{inspect(error)}"
@@ -343,7 +380,7 @@ defmodule Phoenix.PubSub do
   Raising version of `direct_broadcast/5`.
   """
   @spec direct_broadcast!(node_name, t, topic, message, dispatcher) :: :ok
-  def direct_broadcast!(node_name, pubsub, topic, message, dispatcher \\ __MODULE__) do
+  def direct_broadcast!(node_name, pubsub, topic, message, dispatcher \\ nil) do
     case direct_broadcast(node_name, pubsub, topic, message, dispatcher) do
       :ok -> :ok
       {:error, error} -> raise BroadcastError, "broadcast failed: #{inspect(error)}"
@@ -355,7 +392,7 @@ defmodule Phoenix.PubSub do
   """
   @spec node_name(t) :: node_name
   def node_name(pubsub) do
-    {:ok, {adapter, name}} = Registry.meta(pubsub, :pubsub)
+    {:ok, {adapter, name, _dispatcher}} = Registry.meta(pubsub, :pubsub)
     adapter.node_name(name)
   end
 
