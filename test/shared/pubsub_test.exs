@@ -73,6 +73,39 @@ defmodule Phoenix.PubSubTest do
     end
 
     @tag pool_size: size
+    test "pool #{size}: subscribe and unsubscribe with metadata", config do
+      pid = spawn_pid()
+      pid2 = spawn_pid()
+      assert subscribers(config, config.topic) |> length == 0
+
+      # Subscribe with different metadata variants
+      assert rpc(pid, fn ->
+               PubSub.subscribe(config.pubsub, config.topic, metadata: :custom)
+             end)
+
+      assert rpc(pid, fn ->
+               PubSub.subscribe(config.pubsub, config.topic, metadata: :other)
+             end)
+
+      assert rpc(pid2, fn -> PubSub.subscribe(config.pubsub, config.topic) end)
+
+      # Verify all subscriptions exist
+      assert length(subscribers(config, config.topic)) == 3
+      assert {pid, :custom} in subscribers(config, config.topic)
+      assert {pid, :other} in subscribers(config, config.topic)
+      assert {pid2, nil} in subscribers(config, config.topic)
+
+      # Unsubscribe only the :custom metadata subscription
+      assert rpc(pid, fn -> PubSub.unsubscribe_match(config.pubsub, config.topic, :custom) end)
+
+      # Verify only :custom was removed, others remain
+      assert length(subscribers(config, config.topic)) == 2
+      assert {pid, :other} in subscribers(config, config.topic)
+      assert {pid2, nil} in subscribers(config, config.topic)
+      refute {pid, :custom} in subscribers(config, config.topic)
+    end
+
+    @tag pool_size: size
     test "pool #{size}: broadcast/3 and broadcast!/3 publishes message to each subscriber",
          config do
       PubSub.subscribe(config.pubsub, config.topic)
@@ -181,7 +214,7 @@ defmodule Phoenix.PubSubTest do
   @tag registry_size: 2
   test "PubSub pool size can be configured separately from the Registry partitions",
        config do
-    assert {{:duplicate, :pid}, 2, _} = :ets.lookup_element(config.pubsub, -2, 2)
+    assert_ets_duplicate_count(config.pubsub, 2)
 
     assert :persistent_term.get(config.adapter_name) ==
       {:"#{config.adapter_name}_1", :"#{config.adapter_name}_2", :"#{config.adapter_name}_3", :"#{config.adapter_name}_4"}
@@ -190,9 +223,19 @@ defmodule Phoenix.PubSubTest do
   @tag pool_size: 3
   test "Registry partitions are configured with the same pool size as PubSub if not specified",
        config do
-    assert {{:duplicate, :pid}, 3, _} = :ets.lookup_element(config.pubsub, -2, 2)
+    assert_ets_duplicate_count(config.pubsub, 3)
 
     assert :persistent_term.get(config.adapter_name) ==
       {:"#{config.adapter_name}_1", :"#{config.adapter_name}_2", :"#{config.adapter_name}_3"}
+  end
+
+  defp assert_ets_duplicate_count(pubsub, count) do
+    result = :ets.lookup_element(pubsub, -2, 2)
+
+    if Version.match?(System.version(), ">= 1.19.0") do
+      assert {{:duplicate, :pid}, ^count, _} = result
+    else
+      assert {:duplicate, ^count, _} = result
+    end
   end
 end

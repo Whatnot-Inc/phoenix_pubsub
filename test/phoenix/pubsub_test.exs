@@ -1,9 +1,11 @@
 defmodule Phoenix.PubSub.UnitTest do
   use ExUnit.Case, async: true
 
+  alias Phoenix.PubSub
+
   describe "child_spec/1" do
     test "expects a name" do
-      {:error, {{:EXIT, {exception, _}}, _}} = start_supervised({Phoenix.PubSub, []})
+      {:error, {{:EXIT, {exception, _}}, _}} = start_supervised({PubSub, []})
 
       assert Exception.message(exception) ==
                "the :name option is required when starting Phoenix.PubSub"
@@ -20,6 +22,137 @@ defmodule Phoenix.PubSub.UnitTest do
 
     defp name do
       :"#{__MODULE__}_#{:crypto.strong_rand_bytes(8) |> Base.encode16()}"
+    end
+  end
+
+  describe "default dispatcher" do
+    defmodule TestDispatcher do
+      def dispatch(entries, :none, message) do
+        for {pid, _} <- entries do
+          send(pid, {:custom_dispatched, message})
+        end
+
+        :ok
+      end
+
+      def dispatch(entries, from, message) do
+        for {pid, _} <- entries, pid != from do
+          send(pid, {:custom_dispatched, message})
+        end
+
+        :ok
+      end
+    end
+
+    test "defaults to Phoenix.PubSub when no dispatcher configured" do
+      name = :"ps_default_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name})
+
+      PubSub.subscribe(name, "topic")
+      PubSub.broadcast(name, "topic", :hello)
+      assert_receive :hello
+    end
+
+    test "uses configured dispatcher for broadcast/3" do
+      name = :"ps_custom_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name, dispatcher: TestDispatcher})
+
+      PubSub.subscribe(name, "topic")
+      PubSub.broadcast(name, "topic", :hello)
+      assert_receive {:custom_dispatched, :hello}
+      refute_received :hello
+    end
+
+    test "uses configured dispatcher for local_broadcast/3" do
+      name = :"ps_local_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name, dispatcher: TestDispatcher})
+
+      PubSub.subscribe(name, "topic")
+      PubSub.local_broadcast(name, "topic", :hello)
+      assert_receive {:custom_dispatched, :hello}
+    end
+
+    test "uses configured dispatcher for broadcast_from/4" do
+      name = :"ps_from_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name, dispatcher: TestDispatcher})
+
+      PubSub.subscribe(name, "topic")
+      other = spawn(fn -> Process.sleep(:infinity) end)
+      PubSub.broadcast_from(name, other, "topic", :hello)
+      assert_receive {:custom_dispatched, :hello}
+    end
+
+    test "explicit dispatcher overrides the configured default" do
+      name = :"ps_override_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name, dispatcher: TestDispatcher})
+
+      PubSub.subscribe(name, "topic")
+      # Pass Phoenix.PubSub explicitly to override the configured TestDispatcher
+      PubSub.broadcast(name, "topic", :hello, PubSub)
+      assert_receive :hello
+      refute_received {:custom_dispatched, :hello}
+    end
+
+    test "bang variants use configured dispatcher" do
+      name = :"ps_bang_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name, dispatcher: TestDispatcher})
+
+      PubSub.subscribe(name, "topic")
+      PubSub.broadcast!(name, "topic", :hello)
+      assert_receive {:custom_dispatched, :hello}
+    end
+  end
+
+  describe "group_by" do
+    test "defaults to :pid, delivering one message per subscription" do
+      name = :"ps_default_group_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name})
+
+      assert :ok = PubSub.subscribe(name, "topic")
+      assert :ok = PubSub.subscribe(name, "topic")
+
+      PubSub.broadcast(name, "topic", :hello)
+
+      assert_receive :hello
+      assert_receive :hello
+    end
+
+    test ":pid delivers one message per subscription" do
+      name = :"ps_pid_#{:erlang.unique_integer([:positive])}"
+      start_supervised!({PubSub, name: name, group_by: :pid})
+
+      assert :ok = PubSub.subscribe(name, "topic")
+      assert :ok = PubSub.subscribe(name, "topic")
+
+      PubSub.broadcast(name, "topic", :hello)
+
+      assert_receive :hello
+      assert_receive :hello
+    end
+
+    test "raises ArgumentError on an invalid value" do
+      name = :"ps_bad_#{:erlang.unique_integer([:positive])}"
+
+      {:error, {{%ArgumentError{} = exception, _stacktrace}, _child_info}} =
+        start_supervised({PubSub, name: name, group_by: :bogus})
+
+      assert Exception.message(exception) =~ "invalid :group_by option"
+      assert Exception.message(exception) =~ ":bogus"
+    end
+
+    if Version.match?(System.version(), ">= 1.19.0") do
+      test ":key delivers one message per subscription (Elixir 1.19+)" do
+        name = :"ps_key_#{:erlang.unique_integer([:positive])}"
+        start_supervised!({PubSub, name: name, group_by: :key})
+
+        assert :ok = PubSub.subscribe(name, "topic")
+        assert :ok = PubSub.subscribe(name, "topic")
+
+        PubSub.broadcast(name, "topic", :hello)
+
+        assert_receive :hello
+        assert_receive :hello
+      end
     end
   end
 end

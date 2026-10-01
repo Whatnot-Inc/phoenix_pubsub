@@ -10,7 +10,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -36,9 +36,7 @@ jobs:
         env:
           MIX_ENV: test
 
-      # test/support/cluster.ex still spawns nodes via the deprecated :slave
-      # API, which needs a local SSH daemon that CI runners don't have by
-      # default. Upstream has since migrated to the :peer module, which
-      # doesn't need SSH - once we backport that, this exclusion can go away.
       - name: Run tests
-        run: mix test --exclude clustered
+        run: |
+          epmd -daemon
+          mix test
